@@ -12,25 +12,21 @@ class RipDaemon:
         self.id = daemon_configuration['router-id']
         self.input_ports = daemon_configuration['input-ports']
         self.outputs = daemon_configuration['outputs']
-        self.sending_table = {} # Table with router_id : socket() that packets sent on
-        self.receiving_sockets = [] # list of socket()'s that packets sent received on
-        self.lookup = {} # Table of port : router_id
+        self.input_sockets = {} # port : socket() of daemon
+        self.lookup = {} # Table of router_id : port
 
         self.initialise_routing_table()
-        self.initialise_receiving_sockets()
+        self.initialise_input_sockets()
         self.display_routing_table()
-        pprint.pprint(self.sending_table)
-        pprint.pprint(self.receiving_sockets)
-
-        self.close_all_sockets()
+        pprint.pprint(self.input_sockets)
 
 
-    def initialise_receiving_sockets(self):
-        """ For each input_port associated with daemon, create a socket
-            and add it to the list of sockets that daemon is receiving on
+    def initialise_input_sockets(self):
+        """ For each input_port associated with daemon, create a socket and add 
+            it to the list of sockets that daemon is receiving and trasmitting on
         """
         for port in self.input_ports:
-            self.receiving_sockets.append(self.create_socket(port))
+            self.input_sockets[port]= self.create_socket(port)
 
 
     def initialise_routing_table(self):
@@ -42,8 +38,7 @@ class RipDaemon:
         for output in self.outputs:
             router_id, metric = output["output_router"], output["output_metric"]
             self.add_table_entry(router_id, metric, router_id)
-            self.lookup[output["output_port"]] = router_id
-            self.sending_table[router_id] = None
+            self.lookup[router_id] = output["output_port"]
     
      
     def add_table_entry(self, dest, metric, next_hop, timer=0):
@@ -63,26 +58,31 @@ class RipDaemon:
         try:
             s = socket.socket()
             s.bind((MY_IP_ADDRESS, port_number))
+            s.setblocking(False);
             s.listen()
             return s
         except Exception:
-            print(f"SOCKET CREATION FAILED")
+            print(f"Socket creation failed on port {port_number}")
 
 
     def close_all_sockets(self):
         """ Loops through sending and receiving sockets, closing them
             this should be called just before the daemon terminates
         """
-        for _, socket in self.sending_table.values():
-            if socket is not None:
-                socket.close()
-        for socket in self.receiving_sockets:
+        for _, socket in self.input_sockets.items():
             socket.close()
             
 
     def run(self):
         """ Runs the RIPv2 Daemon """
-        pass
+        while True:
+            if (self.is_flood_time()):
+                self.send_routing_table()
+            
+            if (self.is_flood_time()):
+                pass # Check routing table to see if expired routes
+
+            self.handle_incoming_traffic()
 
 
     def check_socket(self, s):
@@ -99,26 +99,47 @@ class RipDaemon:
                 print("Socket did not accept")
 
 
-
-
-    def check_update_table_timer(self):
+    def is_flood_time(self):
         """ Checks if the timer for unscolicated messages has expired """
-        pass
+        return False
+
+
+    def is_garbage_time(self):
+        """ Checks if timer for garbadge collection """
+        return False
 
     
     def send_routing_table(self):
         """ Sends the routing table to all output ports """
+        pass
 
 
+    def handle_incoming_traffic(self):
+        """ Checks all of the daemon sockets and accepts any new connection,
+            will then readthe buffer on that socket, and determine any updates 
+            on the routing table.
+        """
+        for my_port, my_socket in self.input_sockets.items():
+            try:
+                neighbour_socket, address = my_socket.accept()
+
+                print(address)
+            except BlockingIOError:
+                print(f"port: {my_port}")
+        
 
 def main():
     # if len(sys.argv) != 2:
     #     raise Exception
     # filename = sys.argv[1]
     filename = "src/configs.conf"
+    try:
+        daemon = RipDaemon(filename)
+        daemon.run()
+    except KeyboardInterrupt:
+        print("Daemon session ended, all sockets closed")
+        daemon.close_all_sockets()
 
-    daemon = RipDaemon(filename)
-    # daemon.start()
 
 
 main()
