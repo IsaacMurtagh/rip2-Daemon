@@ -4,16 +4,23 @@
 import sys
 from MyExceptions import ParserError
 
+MAX_PORT = 64000
+MIN_PORT = 1024
+
+MAX_METRIC = 15
+MIN_METRIC = 1
+
+MAX_ROUTER_ID = 64000
+MIN_ROUTER_ID = 1
+
 def validate_router_id(router_id):
     """ example return: 4 """
-    MAX_ID = 64000
-    MIN_ID = 1
 
     # Check that router ID is in expected range
     if not router_id.isdigit():
         raise ParserError(f"router-id must be a digit: {router_id}")
-    if not (MIN_ID <= int(router_id) <= MAX_ID):
-        raise ParserError(f"router-id must be in range {MAX_ID}-{MIN_ID}"
+    if not (MIN_ROUTER_ID <= int(router_id) <= MAX_ROUTER_ID):
+        raise ParserError(f"router-id must be in range {MIN_ROUTER_ID}-{MAX_ROUTER_ID}"
                           f"(inclusive): {router_id}")
 
     return int(router_id)
@@ -21,8 +28,6 @@ def validate_router_id(router_id):
 
 def validate_input_ports(input_ports):
     """ example return: [2652, 5004, 2023] """
-    MAX_PORT = 64000
-    MIN_PORT = 1024
 
     # Check ports are all integers
     ports = input_ports.split(",")
@@ -47,20 +52,12 @@ def validate_input_ports(input_ports):
 
 
 def validate_outputs(outputs, input_ports):
-    """ example return: [{"output_port": 9080,
-                          "output_metric" = 3,
-                          "output_router" = 2}]
+    """ example return: {2: {"output_port": 9080,
+                             "output_metric" = 3,
+                             "output_router" = 2}}
     """
-    MAX_PORT = 64000
-    MIN_PORT = 1024
 
-    MAX_METRIC = 15
-    MIN_METRIC = 1
-
-    MAX_ROUTER_ID = 64000
-    MIN_ROUTER_ID = 1
-
-    outputs_list = []
+    outputs_dict = {}
     split_outputs = outputs.split(",")
 
     for out in split_outputs:
@@ -92,24 +89,24 @@ def validate_outputs(outputs, input_ports):
                               f"{MIN_ROUTER_ID}-{MAX_ROUTER_ID} (inclusive): {out}")
         
         # Create dict and add it to the list of outputs
-        output_dict = {
+        output = {
             "output_port": port,
             "output_metric": metric,
             "output_router": router_id 
         }
 
-        outputs_list.append(output_dict)
+        outputs_dict[router_id] = output
 
     # Check there is no duplicate output ports
-    uniq_output_ports = set([ele["output_port"] for ele in outputs_list])
-    if len(outputs_list) != len(uniq_output_ports):
+    uniq_output_ports = set([ele["output_port"] for ele in outputs_dict.values()])
+    if len(outputs_dict) != len(uniq_output_ports):
         raise ParserError(f"All port values in outputs must be unique")
 
     # Check that output ports unique from input ports
     if len(uniq_output_ports.intersection(set(input_ports))) != 0:
         raise ParserError(f"All port values in output ports must be unique from input ports")
 
-    return outputs_list
+    return outputs_dict
 
 
 def parse_lines(lines):
@@ -173,6 +170,13 @@ def parse(filename):
         *outputs [[port_number-hop_count(1-15)-route_id],..] (e.g: 2000-2-10,2921-4-11)
 
         Return: dictionary
+        {
+            'router-id': 1,
+            'input-ports': [1001, 1002]
+            'outputs': {2: {"output_port": 9080,
+                           "output_metric" = 3,
+                           "output_router" = 2}}
+        }
     """
     file = open(filename, "r")
     lines = file.readlines()

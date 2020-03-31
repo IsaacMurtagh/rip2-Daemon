@@ -9,7 +9,7 @@ from random import randint
 MY_IP_ADDRESS = "127.0.0.1"
 BUFF_SIZE = 4096
 
-TIMEOUT_RATIO = 6
+TIMEOUT_RATIO = 1
 FLOOD_TIMER = 30
 GARBAGE_TIMER = 180
 
@@ -17,16 +17,15 @@ class RipDaemon:
     def __init__(self, configuration_filename):
         daemon_configuration = Config_parser.parse(configuration_filename)
         input_ports = daemon_configuration['input-ports']
-        outputs = daemon_configuration['outputs']
-
+        
+        self.lookup = daemon_configuration['outputs']
         self.id = daemon_configuration['router-id']
         self.input_sockets = {} # port : socket() of daemon
-        self.lookup = {} # Table of router_id : port
         self.routing_table = {} # destination_router: dict of entries
         self.updated = False # Used to notify daemon if it needs to send a triggered update
 
-        self.initialise_routing_table(outputs)
         self.initialise_input_sockets(input_ports)
+        pprint.pprint(self.lookup)
         self.display_routing_table()
 
     def initialise_input_sockets(self, input_ports):
@@ -35,17 +34,6 @@ class RipDaemon:
         """
         for port in input_ports:
             self.input_sockets[port]= self.create_socket(port)
-
-
-    def initialise_routing_table(self, outputs):
-        """ Take the initial information given from the configuration files and 
-            populate the routing table and lookup reference table used to associate
-            router-id's with socket  ports.
-        """
-        for output in outputs:
-            router_id, metric = output["output_router"], output["output_metric"]
-            self.add_table_entry(router_id, metric, router_id)
-            self.lookup[router_id] = output["output_port"]
     
      
     def add_table_entry(self, dest, metric, next_hop, timer=0, flag=False):
@@ -64,10 +52,12 @@ class RipDaemon:
             "flag": flag
             }
 
+
     def display_routing_table(self):
         print("--- ROUTING TABLE ---")
         pprint.pprint(self.routing_table)
         print("---------------------")
+
 
     def create_socket(self, port_number):
         """ Creates a socket and returns it for a given port number """
@@ -86,42 +76,34 @@ class RipDaemon:
             this should be called just before the daemon terminates
         """
         for _, socket in self.input_sockets.items():
-            socket.close()
-            
+            try:
+                socket.close()
+            except Exception:
+                pass
+
 
     def run(self):
         """ Runs the RIPv2 Daemon """
         flood_time = time.time()
         garbadge_time = time.time()
-
+        print(f'----- RIP Daemon {self.id} running... ----')
         while True:
             if (self.is_flood_time(flood_time)):
+                print("-- Periodic Update --")
                 self.send_routing_table()
                 flood_time = time.time()
+                # self.display_routing_table()
             
             if (self.is_garbage_time(garbadge_time)):
                 garbadge_time = time.time()
 
             self.handle_incoming_traffic()
             if (self.updated):
+                print("-- Triggered Update --")
                 self.updated = False
+                self.send_routing_table()
                 self.display_routing_table()
             
-
-
-    def check_socket(self, s):
-        """ Checks if any data avaliable on the socket to be read, if there is
-            then take that information and do something with it
-        """
-        for socket in self.receiving_sockets:
-            socket.settimeout(2)
-            try:
-                output_socket, address = socket.accept()
-                port = address[1]
-                self.sending_table[lookup[port]] = output_socket
-            except socket.timeout:
-                print("Socket did not accept")
-
 
     def is_flood_time(self, flood_time):
         """ Checks if the timer for unscolicated messages has expired.
@@ -145,17 +127,19 @@ class RipDaemon:
     
     def send_routing_table(self):
         """ Sends the routing table to all output ports """
-        print("Sending routing table")
-        for router_id, port_number in self.lookup.items():
+        print("- Sending routing table -")
+        for router_id in self.lookup:
+            port_number = self.lookup[router_id]['output_port']
             try:
                 s = socket.socket()
                 s.connect((MY_IP_ADDRESS, port_number))
                 data = self.generate_datagram()
                 s.send(data)
                 s.close()
+                print(f"Connected to: Router {router_id}")
             except Exception as e:
                 if (e.errno == 111): # Connection refused, no interface on given port
-                    print(f"Could not connect to {port_number}")
+                    print(f"Could not connect to: Router {router_id}")
                 else:
                     raise e
 
@@ -194,8 +178,8 @@ class RipDaemon:
             try:
                 neighbour_socket, address = my_socket.accept()
                 data = self.recieve_data(neighbour_socket)
-                neighbour_table = self.parse_update_message(data)
-                self.update_routing_table(neighbour_table)
+                neighbour_table, neighbour_id = self.parse_update_message(data)
+                self.update_routing_table(neighbour_table, neighbour_id)
                 neighbour_socket.close()
             except BlockingIOError:
                 pass # No messages on socket
@@ -207,11 +191,10 @@ class RipDaemon:
         
     
     def parse_update_message(self, data):
-        """ Takes a response packet it has received, does error checking and
-            returns a dict of parsed information.
+        """ Takes a response packet it has received, does error checking and returns 
+            a dict of parsed information and the id of the router that sent the message.
             {next: ..., dest: ..., metric: ...}
         """
-
         command = data[0]
         version = data[1]
         router_id = (data[2] << 8) | data[3]
@@ -224,7 +207,7 @@ class RipDaemon:
             metric = data[i + 19]
             table.append({'next': router_id, "dest": dest, "metric": metric})
 
-        return table
+        return table, router_id
 
     
     def recieve_data(self, s):
@@ -242,14 +225,23 @@ class RipDaemon:
         return bytearray(data)
 
 
-    def update_routing_table(self, neighbour_table):
+    def update_routing_table(self, neighbour_table, neighbour_id):
         """ Takes a list of dictionary's as a paramater and uses the information 
             to determine the best routes, by comparing it to it's own routing table.
+
+            When it receives information about a neighbour, it can used the predefined configurations
+            to add an entry, self.lookup,  for its directly attached neighbours configs.
+
             Sets updated to true if there has been changes for triggered update
         """
+        if self.routing_table.get(neighbour_id) is None:
+            self.updated = True
+        self.add_table_entry(neighbour_id, self.lookup[neighbour_id]['output_metric'], neighbour_id)
+
         for entry in neighbour_table:
             my_entry = self.routing_table.get(entry['dest'])
             calculated_metric = self.routing_table[entry['next']]['metric'] + entry['metric']
+
             if entry['dest'] == self.id:
                 continue # Ignore routes to self
             elif (my_entry is None): # No entry for that destination
