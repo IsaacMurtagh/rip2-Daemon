@@ -4,6 +4,7 @@ import pprint
 import socket
 import time
 from random import randint
+from copy import deepcopy
 # sys.tracebacklimit=0
 
 MY_IP_ADDRESS = "127.0.0.1"
@@ -12,6 +13,7 @@ BUFF_SIZE = 4096
 TIMEOUT_RATIO = 1
 FLOOD_TIMER = 30
 GARBAGE_TIMER = 180
+DISPLAY_TABLE_TIMER = 10
 
 class RipDaemon:
     def __init__(self, configuration_filename):
@@ -25,8 +27,8 @@ class RipDaemon:
         self.updated = False # Used to notify daemon if it needs to send a triggered update
 
         self.initialise_input_sockets(input_ports)
+        print("lookup table")
         pprint.pprint(self.lookup)
-        self.display_routing_table()
 
     def initialise_input_sockets(self, input_ports):
         """ For each input_port associated with daemon, create a socket and add 
@@ -36,7 +38,7 @@ class RipDaemon:
             self.input_sockets[port]= self.create_socket(port)
     
      
-    def add_table_entry(self, dest, metric, next_hop, timer=0, flag=False):
+    def add_table_entry(self, dest, metric, next_hop, flag=False):
         """ Adds an entry to the routing table 
             dest = destination router
             metric = hop count to dest
@@ -48,14 +50,20 @@ class RipDaemon:
             "dest": dest, 
             "metric": metric, 
             "next": next_hop, 
-            "timer":timer,
+            "timer":time.time(),
             "flag": flag
             }
 
 
     def display_routing_table(self):
+        """ Displays the routing table in a readable format, with timers in seconds """
+        cpy_routing_table = deepcopy(self.routing_table)
+        current_time = time.time()
+        for entry in cpy_routing_table.values():
+            entry['timer'] = f"{current_time - entry['timer']:.0f}s"
+
         print("--- ROUTING TABLE ---")
-        pprint.pprint(self.routing_table)
+        pprint.pprint(cpy_routing_table)
         print("---------------------")
 
 
@@ -84,26 +92,31 @@ class RipDaemon:
 
     def run(self):
         """ Runs the RIPv2 Daemon """
-        flood_time = time.time()
-        garbadge_time = time.time()
+        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / TIMEOUT_RATIO)
+        garbage_time = time.time() + (GARBAGE_TIMER / TIMEOUT_RATIO)
+        display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
+
         print(f'----- RIP Daemon {self.id} running... ----')
         while True:
-            if (self.is_flood_time(flood_time)):
+            self.handle_incoming_traffic()
+
+            if (time.time() >= flood_time): # Periodic Update
                 print("-- Periodic Update --")
+                flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / TIMEOUT_RATIO)
                 self.send_routing_table()
-                flood_time = time.time()
                 # self.display_routing_table()
             
-            if (self.is_garbage_time(garbadge_time)):
-                garbadge_time = time.time()
+            if (time.time() >= garbage_time): # Garbage collection
+                garbage_time = time.time() + (GARBAGE_TIMER / TIMEOUT_RATIO)
 
-            self.handle_incoming_traffic()
             if (self.updated):
                 print("-- Triggered Update --")
                 self.updated = False
                 self.send_routing_table()
+
+            if(time.time() >= display_time): # Print the current state of routing table
+                display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
                 self.display_routing_table()
-            
 
     def is_flood_time(self, flood_time):
         """ Checks if the timer for unscolicated messages has expired.
@@ -125,7 +138,7 @@ class RipDaemon:
         return (time.time() - garbage_time) >= timeout 
 
     
-    def send_routing_table(self):
+    def send_routing_table(self, triggered_update=False):
         """ Sends the routing table to all output ports """
         print("- Sending routing table -")
         for router_id in self.lookup:
@@ -133,20 +146,25 @@ class RipDaemon:
             try:
                 s = socket.socket()
                 s.connect((MY_IP_ADDRESS, port_number))
-                data = self.generate_datagram()
+                data = self.generate_datagram(router_id, triggered_update)
                 s.send(data)
                 s.close()
-                print(f"Connected to: Router {router_id}")
+                print(f"CONNECTION: Router {router_id}")
             except Exception as e:
                 if (e.errno == 111): # Connection refused, no interface on given port
-                    print(f"Could not connect to: Router {router_id}")
+                    print(f"CONNECTION FAILED: Router {router_id}")
                 else:
                     raise e
 
     
-    def generate_datagram(self):
+    def generate_datagram(self, neighbour_id, triggered_update):
         """ Generates the RIP datagram, can have at most 25 entries, therefore
             a list of all the datgram generated is returned.
+
+            If it is a triggered update, then send only those which have flag set true
+
+            Split horizons: Don't send routing entries about destinations to those
+            who are the next hop.
         """
         # --- INCOMPLETE ---
         # Must implemenent splitting datagrams when more than 25 entries.
@@ -157,11 +175,12 @@ class RipDaemon:
         header[3] = 0x00FF & self.id
 
         for row in self.routing_table.values():
-            entry = bytearray(20)
-            entry[6] = 0xFF00 & row['dest']
-            entry[7] = 0x00FF & row['dest']
-            entry[19] = row['metric']
-            header += entry
+            if row['next'] != neighbour_id: # Split horizons
+                entry = bytearray(20)
+                entry[6] = 0xFF00 & row['dest']
+                entry[7] = 0x00FF & row['dest']
+                entry[19] = row['metric']
+                header += entry
 
         return header
 
@@ -177,8 +196,10 @@ class RipDaemon:
         for my_port, my_socket in self.input_sockets.items():
             try:
                 neighbour_socket, address = my_socket.accept()
-                data = self.recieve_data(neighbour_socket)
+                data = self.receive_data(neighbour_socket)
                 neighbour_table, neighbour_id = self.parse_update_message(data)
+                print(f"Received from router {neighbour_id}")
+                print(neighbour_table)
                 self.update_routing_table(neighbour_table, neighbour_id)
                 neighbour_socket.close()
             except BlockingIOError:
@@ -187,9 +208,10 @@ class RipDaemon:
                 print(f"Malformed packet received on port {my_port}")
                 neighbour_socket.close()
             except IndexError:
-                print("index error")
+                print(f"Malformed packet received on port {my_port}")
+                neighbour_socket.close()
+
         
-    
     def parse_update_message(self, data):
         """ Takes a response packet it has received, does error checking and returns 
             a dict of parsed information and the id of the router that sent the message.
@@ -210,10 +232,10 @@ class RipDaemon:
         return table, router_id
 
     
-    def recieve_data(self, s):
+    def receive_data(self, s):
         """ Receive data that has been put onto socket s """
         data = b''
-        s.settimeout(0.2)
+        s.settimeout(0.1)
         while True:
             try:
                 part = s.recv(BUFF_SIZE)
@@ -249,11 +271,13 @@ class RipDaemon:
                     self.add_table_entry(entry['dest'], calculated_metric, entry['next']) # add entry
                     self.updated = True
             else:
-                if my_entry['next'] == entry['next']:
-                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
-                elif calculated_metric < my_entry['metric']:
+                if calculated_metric < my_entry['metric']:
                     self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
                     self.updated = True
+                elif my_entry['next'] == entry['next']: # My route 
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
+                else:
+                    self.add_table_entry(entry['dest'], my_entry['metric'], my_entry['next'])
 
 
 def main():
