@@ -22,7 +22,8 @@ class RipDaemon:
         self.id = daemon_configuration['router-id']
         self.input_sockets = {} # port : socket() of daemon
         self.lookup = {} # Table of router_id : port
-        self.routing_table = [] # Used to determine routes and for response messages
+        self.routing_table = {} # destination_router: dict of entries
+        self.updated = False # Used to notify daemon if it needs to send a triggered update
 
         self.initialise_routing_table(outputs)
         self.initialise_input_sockets(input_ports)
@@ -55,13 +56,13 @@ class RipDaemon:
             timer = how long since there has been an update for this entry
             flag = False when has not been changed, true when has been
         """
-        self.routing_table.append({
+        self.routing_table[dest] = {
             "dest": dest, 
             "metric": metric, 
             "next": next_hop, 
             "timer":timer,
             "flag": flag
-            })
+            }
 
     def display_routing_table(self):
         print("--- ROUTING TABLE ---")
@@ -102,6 +103,10 @@ class RipDaemon:
                 garbadge_time = time.time()
 
             self.handle_incoming_traffic()
+            if (self.updated):
+                self.updated = False
+                self.display_routing_table()
+            
 
 
     def check_socket(self, s):
@@ -145,16 +150,41 @@ class RipDaemon:
             try:
                 s = socket.socket()
                 s.connect((MY_IP_ADDRESS, port_number))
-                s.send(bytearray(str(self.id).encode())) # Currently just sends router ID
+                data = self.generate_datagram()
+                s.send(data)
                 s.close()
             except Exception as e:
                 if (e.errno == 111): # Connection refused, no interface on given port
                     print(f"Could not connect to {port_number}")
+                else:
+                    raise e
+
+    
+    def generate_datagram(self):
+        """ Generates the RIP datagram, can have at most 25 entries, therefore
+            a list of all the datgram generated is returned.
+        """
+        # --- INCOMPLETE ---
+        # Must implemenent splitting datagrams when more than 25 entries.
+        header = bytearray(4)
+        header[0] = 2 # Command: Response
+        header[1] = 2 # Version: RIPv2
+        header[2] = 0xFF00 & self.id # Split 16 bit router id
+        header[3] = 0x00FF & self.id
+
+        for row in self.routing_table.values():
+            entry = bytearray(20)
+            entry[6] = 0xFF00 & row['dest']
+            entry[7] = 0x00FF & row['dest']
+            entry[19] = row['metric']
+            header += entry
+
+        return header
 
 
     def handle_incoming_traffic(self):
         """ Checks all of the daemon sockets and accepts any new connection,
-            will then read the buffer on that socket, and determine any updates 
+            will then read the buffer on that socket, and determines if any updates 
             on the routing table.
 
             Is not blocking, so if there is not already a request on the socket, it throws
@@ -163,11 +193,39 @@ class RipDaemon:
         for my_port, my_socket in self.input_sockets.items():
             try:
                 neighbour_socket, address = my_socket.accept()
-                print(self.recieve_data(neighbour_socket))
+                data = self.recieve_data(neighbour_socket)
+                neighbour_table = self.parse_update_message(data)
+                self.update_routing_table(neighbour_table)
                 neighbour_socket.close()
             except BlockingIOError:
-                pass
+                pass # No messages on socket
+            except ValueError:
+                print(f"Malformed packet received on port {my_port}")
+                neighbour_socket.close()
+            except IndexError:
+                print("index error")
         
+    
+    def parse_update_message(self, data):
+        """ Takes a response packet it has received, does error checking and
+            returns a dict of parsed information.
+            {next: ..., dest: ..., metric: ...}
+        """
+
+        command = data[0]
+        version = data[1]
+        router_id = (data[2] << 8) | data[3]
+        if (command != 2 and version != 2):
+            raise ValueError
+
+        table = []
+        for i in range(4, len(data), 20):
+            dest = (data[i + 6] << 8) + data[i + 7]
+            metric = data[i + 19]
+            table.append({'next': router_id, "dest": dest, "metric": metric})
+
+        return table
+
     
     def recieve_data(self, s):
         """ Receive data that has been put onto socket s """
@@ -182,6 +240,29 @@ class RipDaemon:
             if len(part) < BUFF_SIZE:
                 break
         return bytearray(data)
+
+
+    def update_routing_table(self, neighbour_table):
+        """ Takes a list of dictionary's as a paramater and uses the information 
+            to determine the best routes, by comparing it to it's own routing table.
+            Sets updated to true if there has been changes for triggered update
+        """
+        for entry in neighbour_table:
+            my_entry = self.routing_table.get(entry['dest'])
+            calculated_metric = self.routing_table[entry['next']]['metric'] + entry['metric']
+            if entry['dest'] == self.id:
+                continue # Ignore routes to self
+            elif (my_entry is None): # No entry for that destination
+                if calculated_metric < 16:
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next']) # add entry
+                    self.updated = True
+            else:
+                if my_entry['next'] == entry['next']:
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
+                elif calculated_metric < my_entry['metric']:
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
+                    self.updated = True
+
 
 def main():
     if len(sys.argv) != 2:
