@@ -39,25 +39,6 @@ class RipDaemon:
         """
         for port in input_ports:
             self.input_sockets[port]= self.create_socket(port)
-    
-     
-    def add_table_entry(self, dest, metric, next_hop, flag=True):
-        """ Adds an entry to the routing table 
-            dest = destination router
-            metric = hop count to dest
-            next = the router to forward to, to reach dest
-            timer = how long since there has been an update for this entry
-            flag = False when has not been changed, true when has been
-        """
-        if (flag):
-            self.updated = True
-        self.routing_table[dest] = {
-            "dest": dest, 
-            "metric": metric, 
-            "next": next_hop, 
-            "timer":time.time(),
-            "flag": flag
-            }
 
 
     def display_routing_table(self):
@@ -97,7 +78,7 @@ class RipDaemon:
 
     def run(self):
         """ Runs the RIPv2 Daemon """
-        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / TIMEOUT_RATIO)
+        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) /                                                                                      TIMEOUT_RATIO)
         display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
 
         print(f'----- RIP Daemon {self.id} running... ----')
@@ -119,6 +100,25 @@ class RipDaemon:
             if(time.time() >= display_time): # Print the current state of routing table
                 display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
                 self.display_routing_table()
+
+
+    def add_table_entry(self, dest, metric, next_hop, flag=True):
+        """ Adds an entry to the routing table 
+            dest = destination router
+            metric = hop count to dest
+            next = the router to forward to, to reach dest
+            timer = how long since there has been an update for this entry
+            flag = False when has not been changed, true when has been
+        """
+        if (flag):
+            self.updated = True
+        self.routing_table[dest] = {
+            "dest": dest, 
+            "metric": metric, 
+            "next": next_hop, 
+            "timer":time.time(),
+            "flag": flag
+            }
 
 
     def check_route_timers(self):
@@ -143,7 +143,9 @@ class RipDaemon:
 
 
     def send_routing_table(self, triggered=False):
-        """ Sends the routing table to all output ports """
+        """ Sends the routing table on all output ports which prints out successful and 
+            unsuccessful connections. 
+        """
         for router_id in self.lookup:
             port_number = self.lookup[router_id]['output_port']
             try:
@@ -309,9 +311,10 @@ def main():
     # filename = "src/configs.conf"
     try:
         daemon = RipDaemon(filename)
+        id = daemon.id
         daemon.run()
     except KeyboardInterrupt:
-        print("Daemon session ended, all sockets closed")
+        print(f"Daemon session {id} ended, all sockets closed")
     finally:
         try:
             daemon.close_all_sockets()
