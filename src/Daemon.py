@@ -11,7 +11,7 @@ from copy import deepcopy
 MY_IP_ADDRESS = "127.0.0.1"
 BUFF_SIZE = 4096
 
-TIMEOUT_RATIO = 3
+TIMEOUT_RATIO = 1
 FLOOD_TIMER = 30
 DISPLAY_TABLE_TIMER = 10
 ROUTE_TIMEOUT = 180
@@ -22,7 +22,9 @@ class RipDaemon:
     def __init__(self, configuration_filename):
         daemon_configuration = Config_parser.parse(configuration_filename)
         input_ports = daemon_configuration['input-ports']
+        TIMEOUT_RATIO = daemon_configuration['time-ratio']
         
+        self.start_time = time.time()
         self.lookup = daemon_configuration['outputs']
         self.id = daemon_configuration['router-id']
         self.input_sockets = {} # port : socket() of daemon
@@ -30,8 +32,12 @@ class RipDaemon:
         self.updated = False # Used to notify daemon if it needs to send a triggered update
 
         self.initialise_input_sockets(input_ports)
-        print("lookup table")
+        print("Parsed Config File")
+        pprint.pprint(daemon_configuration)
+
+        print("\nLookup Table")
         pprint.pprint(self.lookup)
+
 
     def initialise_input_sockets(self, input_ports):
         """ For each input_port associated with daemon, create a socket and add 
@@ -41,6 +47,13 @@ class RipDaemon:
             self.input_sockets[port]= self.create_socket(port)
 
 
+    def running_time(self):
+        """ Returns string min:second of how long program has been running """
+        since_inception = int(time.time() - self.start_time)
+        return f"[{since_inception // 60}:{since_inception % 60:02}]"
+
+
+
     def display_routing_table(self):
         """ Displays the routing table in a readable format, with timers in seconds """
         cpy_routing_table = deepcopy(self.routing_table)
@@ -48,7 +61,7 @@ class RipDaemon:
         for entry in cpy_routing_table.values():
             entry['timer'] = f"{current_time - entry['timer']:.0f}s"
 
-        print("--- ROUTING TABLE ---")
+        print(f"{self.running_time()} --- ROUTING TABLE ---")
         pprint.pprint(cpy_routing_table)
         print("---------------------\n")
 
@@ -89,17 +102,17 @@ class RipDaemon:
 
             # Triggered update if periodic update is not soon
             if self.updated and not (time.time() + (5 / TIMEOUT_RATIO) >= flood_time): 
-                print("-- Triggered Update --")
+                print(f"{self.running_time()} -- Triggered Update --")
                 self.send_routing_table(triggered=True)
 
             if (time.time() >= flood_time): # Periodic Update
-                print("-- Periodic Update --")
+                print(f"{self.running_time()} -- Periodic Update --")
                 flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / TIMEOUT_RATIO)
                 self.send_routing_table()
 
             if(time.time() >= display_time): # Print the current state of routing table
                 display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
-                self.display_routing_table()
+                self.display_routing_table() 
 
 
     def add_table_entry(self, dest, metric, next_hop, flag=True):
@@ -134,11 +147,11 @@ class RipDaemon:
             entry = self.routing_table[id]
             if entry['metric'] == 16: # Check for garbage collection
                 if time.time() >= entry['timer'] + (GARBAGE_TIMEOUT / TIMEOUT_RATIO):
-                    print(f"Deleting router {id} from table")
+                    print(f"{self.running_time()} Deleting router {id} from table")
                     del self.routing_table[id]
             else: # Check for expired timer
                 if time.time() >= entry['timer'] + (ROUTE_TIMEOUT / TIMEOUT_RATIO):
-                    print(f"Setting router {id} as unreachable")
+                    print(f"{self.running_time()} Setting router {id} as unreachable")
                     self.add_table_entry(entry['dest'], 16, entry['next'], True)
 
 
@@ -165,16 +178,13 @@ class RipDaemon:
 
     
     def generate_datagram(self, neighbour_id, triggered):
-        """ Generates the RIP datagram, can have at most 25 entries, therefore
-            a list of all the datgram generated is returned.
-
+        """ Generates the RIP datagram.
             If it is a triggered update, then send only those which have flag set true
 
             Split horizons: Don't send routing entries about destinations to those
             who are the next hop.
         """
-        # --- INCOMPLETE ---
-        # Must implemenent splitting datagrams when more than 25 entries.
+
         header = bytearray(4)
         header[0] = 2 # Command: Response
         header[1] = 2 # Version: RIPv2
@@ -214,7 +224,7 @@ class RipDaemon:
                 neighbour_socket, address = my_socket.accept()
                 data = self.receive_data(neighbour_socket)
                 neighbour_table, neighbour_id = self.parse_update_message(data)
-                print(f"Received from router {neighbour_id}")
+                print(f"{self.running_time()} Received from router {neighbour_id}")
                 pprint.pprint(neighbour_table, indent=5)
                 print()
                 self.update_routing_table(neighbour_table, neighbour_id)
@@ -222,16 +232,16 @@ class RipDaemon:
             except BlockingIOError:
                 pass # No messages on socket
             except ValueError:
-                print(f"Malformed packet received on port {my_port}")
+                print(f"Malformed packet received by router {neighbour_id}")
                 neighbour_socket.close()
             except IndexError:
-                print(f"Malformed packet received on port {my_port}")
+                print(f"Malformed packet received by router {neighbour_id}")
                 neighbour_socket.close()
 
         
     def parse_update_message(self, data):
         """ Takes a response packet it has received, does error checking and returns 
-            a dict of parsed information and the id of the router that sent the message.
+            a list of dicts of information.
             {next: ..., dest: ..., metric: ...}
         """
         command = data[0]
@@ -274,7 +284,7 @@ class RipDaemon:
             Sets updated to true if there has been changes and a triggered update is required
         """
         if self.routing_table.get(neighbour_id) is None:
-            self.add_table_entry(neighbour_id, self.lookup[neighbour_id]['output_metric'], neighbour_id)
+            self.add_table_entry(neighbour_id, self.lookup[neighbour_id]['output_metric'], neighbour_id, True)
         else:
             self.add_table_entry(neighbour_id, self.lookup[neighbour_id]['output_metric'], neighbour_id, False)
 
@@ -287,18 +297,18 @@ class RipDaemon:
 
             elif (my_entry is None): # No entry for that destination
                 if calculated_metric < 16:
-                    self.add_table_entry(entry['dest'], calculated_metric, entry['next']) # add entry
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'], True) # add entry
 
             else:
                 if calculated_metric == 16 and my_entry['metric'] == 16: # Ignore update of known unreachable route
                     continue
 
                 elif calculated_metric < my_entry['metric']: # New best route
-                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
+                    self.add_table_entry(entry['dest'], calculated_metric, entry['next'], True)
 
                 elif my_entry['next'] == entry['next']: # Update by used route
                     if my_entry['metric'] != calculated_metric: # Route is now worse
-                        self.add_table_entry(entry['dest'], calculated_metric, entry['next'])
+                        self.add_table_entry(entry['dest'], calculated_metric, entry['next'], True)
 
                     else:
                         self.add_table_entry(entry['dest'], calculated_metric, entry['next'], False)
@@ -308,7 +318,6 @@ def main():
     if len(sys.argv) != 2:
         raise Exception
     filename = sys.argv[1]
-    # filename = "src/configs.conf"
     try:
         daemon = RipDaemon(filename)
         id = daemon.id
@@ -321,4 +330,5 @@ def main():
         except Exception:
             pass
 
-main()
+if __name__ == "__main__":
+    main()

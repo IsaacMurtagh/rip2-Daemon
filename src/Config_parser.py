@@ -3,6 +3,7 @@
 """
 import sys
 from MyExceptions import ParserError
+sys.tracebacklimit=0
 
 MAX_PORT = 64000
 MIN_PORT = 1024
@@ -12,6 +13,9 @@ MIN_METRIC = 1
 
 MAX_ROUTER_ID = 64000
 MIN_ROUTER_ID = 1
+
+MAX_TIME_RATIO = 10
+MIN_TIME_RATIO = 1
 
 def validate_router_id(router_id):
     """ example return: 4 """
@@ -24,6 +28,17 @@ def validate_router_id(router_id):
                           f"(inclusive): {router_id}")
 
     return int(router_id)
+
+
+def validate_time_ratio(time_ratio):
+    """ returns int of value """
+    if not time_ratio.isdigit():
+        raise ParserError(f"time-ratio must be a digit: {time_ratio}")
+    if not (MIN_TIME_RATIO <= int(time_ratio) <= MAX_TIME_RATIO):
+        raise ParserError(f"time-ratio must be in range {MIN_TIME_RATIO}-{MAX_TIME_RATIO}"
+                          f"(inclusive): {time_ratio}")
+
+    return int(time_ratio)
 
 
 def validate_input_ports(input_ports):
@@ -112,7 +127,8 @@ def validate_outputs(outputs, input_ports):
 def parse_lines(lines):
     configurations = {'router-id': [],
                       'input-ports': [],
-                      'outputs': []}
+                      'outputs': [],
+                      'time-ratio': []}
 
     for line in lines:
         if line.startswith("#"):
@@ -140,22 +156,23 @@ def parse_lines(lines):
 
 def mutate_configs(configuration):
     """ Raises Exception if configurations not in the correct format """
-    router_id = configuration['router-id']
-    input_ports = configuration['input-ports']
-    outputs = configuration['outputs']
+    if len(configuration['time-ratio']) == 0:
+        configuration['time-ratio'].append('1')
+
+    router_id = configuration['router-id'][0]
+    input_ports = configuration['input-ports'][0]
+    outputs = configuration['outputs'][0]
+    time_ratio = configuration['time-ratio'][0]
 
     # Check that there is only one entry for each token
     for token, value in configuration.items():
         if len(value) != 1:
             raise ParserError(f"Multiple lines for token: {token}")
     
-    router_id = router_id[0]
-    input_ports = input_ports[0]
-    outputs = outputs[0]
-    
     configuration['router-id'] = validate_router_id(router_id)
     configuration['input-ports'] = validate_input_ports(input_ports)
     configuration['outputs'] = validate_outputs(outputs, input_ports)
+    configuration['time-ratio'] = validate_time_ratio(time_ratio)
 
 
 def parse(filename):
