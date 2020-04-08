@@ -11,7 +11,6 @@ from copy import deepcopy
 MY_IP_ADDRESS = "127.0.0.1"
 BUFF_SIZE = 4096
 
-TIMEOUT_RATIO = 1
 FLOOD_TIMER = 30
 DISPLAY_TABLE_TIMER = 10
 ROUTE_TIMEOUT = 180
@@ -22,7 +21,7 @@ class RipDaemon:
     def __init__(self, configuration_filename):
         daemon_configuration = Config_parser.parse(configuration_filename)
         input_ports = daemon_configuration['input-ports']
-        TIMEOUT_RATIO = daemon_configuration['time-ratio']
+        self.timeout_ratio = daemon_configuration['time-ratio']
         
         self.start_time = time.time()
         self.lookup = daemon_configuration['outputs']
@@ -61,7 +60,7 @@ class RipDaemon:
         for entry in cpy_routing_table.values():
             entry['timer'] = f"{current_time - entry['timer']:.0f}s"
 
-        print(f"{self.running_time()} --- ROUTING TABLE ---")
+        print(f"{self.running_time()} --- R{self.id} ROUTING TABLE ---")
         pprint.pprint(cpy_routing_table)
         print("---------------------\n")
 
@@ -89,30 +88,37 @@ class RipDaemon:
                 pass
 
 
-    def run(self):
-        """ Runs the RIPv2 Daemon """
-        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) /                                                                                      TIMEOUT_RATIO)
-        display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
+    def run(self, run_time=None):
+        """ Runs the RIPv2 Daemon.
+            Run time can be set to an integer in seconds to determine how long the daemon will run.
+            The purpose of this is primarly for testing purposes, to break the loop once time is up
+        """
+        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) /                                                                                      self.timeout_ratio)
+        display_time = time.time() + (DISPLAY_TABLE_TIMER / self.timeout_ratio)
 
-        print(f'----- RIP Daemon {self.id} running... ----')
+        print(f'----- RIP Daemon {self.id} running at {self.timeout_ratio}x speed... ----')
         while True:
             time.sleep(0.1) # Used to slow the program and stop it eating too much resources
             self.handle_incoming_traffic()
             self.check_route_timers()
 
             # Triggered update if periodic update is not soon
-            if self.updated and not (time.time() + (5 / TIMEOUT_RATIO) >= flood_time): 
+            if self.updated and not (time.time() + (5 / self.timeout_ratio) >= flood_time): 
                 print(f"{self.running_time()} -- Triggered Update --")
                 self.send_routing_table(triggered=True)
 
             if (time.time() >= flood_time): # Periodic Update
                 print(f"{self.running_time()} -- Periodic Update --")
-                flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / TIMEOUT_RATIO)
+                flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / self.timeout_ratio)
                 self.send_routing_table()
 
             if(time.time() >= display_time): # Print the current state of routing table
-                display_time = time.time() + (DISPLAY_TABLE_TIMER / TIMEOUT_RATIO)
-                self.display_routing_table() 
+                display_time = time.time() + (DISPLAY_TABLE_TIMER / self.timeout_ratio)
+                self.display_routing_table()
+
+            #if run_time was configured, check if break should occur.
+            if run_time is not None and run_time + self.start_time <= time.time():
+                break;
 
 
     def add_table_entry(self, dest, metric, next_hop, flag=True):
@@ -146,11 +152,11 @@ class RipDaemon:
         for id in list(self.routing_table):
             entry = self.routing_table[id]
             if entry['metric'] == 16: # Check for garbage collection
-                if time.time() >= entry['timer'] + (GARBAGE_TIMEOUT / TIMEOUT_RATIO):
+                if time.time() >= entry['timer'] + (GARBAGE_TIMEOUT / self.timeout_ratio):
                     print(f"{self.running_time()} Deleting router {id} from table")
                     del self.routing_table[id]
             else: # Check for expired timer
-                if time.time() >= entry['timer'] + (ROUTE_TIMEOUT / TIMEOUT_RATIO):
+                if time.time() >= entry['timer'] + (ROUTE_TIMEOUT / self.timeout_ratio):
                     print(f"{self.running_time()} Setting router {id} as unreachable")
                     self.add_table_entry(entry['dest'], 16, entry['next'], True)
 
@@ -329,6 +335,7 @@ def main():
             daemon.close_all_sockets()
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     main()
