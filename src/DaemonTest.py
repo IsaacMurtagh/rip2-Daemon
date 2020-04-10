@@ -1,4 +1,7 @@
-
+"""
+    Cosc364 RipV2 Daemon assignment
+    Authors: itm20, ljm176
+"""
 from Daemon import RipDaemon
 import pytest
 import threading

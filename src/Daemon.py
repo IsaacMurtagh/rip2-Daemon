@@ -1,3 +1,8 @@
+"""
+    Cosc364 RipV2 Daemon assignment
+    Authors: itm20, ljm176
+"""
+
 import sys
 import Config_parser
 import pprint

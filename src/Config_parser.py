@@ -1,5 +1,6 @@
-""" Cosc364 assignment 1
-    Authors: Isaac Murtagh and --
+"""
+    Cosc364 RipV2 Daemon assignment
+    Authors: itm20, ljm176
 """
 import sys
 from MyExceptions import ParserError

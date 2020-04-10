@@ -16,3 +16,9 @@ RUNNING INDIVIDUAL DAEMONS
     2. Change directory to rip-assignment/src
     3. execute command "python3 Daemon.py ../configs/topology1x1/router1.conf"
         - This is useful for killing and reinstating daemons.
+
+RUNNING AUTOMATED TESTS
+    1. Open a new terminal window
+    2. Change directory to rip-assignment/src
+    3. execute command "pytest -v -s DaemonTest.py"
+        - Will need pytest installed
