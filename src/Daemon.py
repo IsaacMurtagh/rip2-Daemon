@@ -181,12 +181,7 @@ class RipDaemon:
                 print(f"CONNECTION: Router {router_id}")
             except Exception as e:
                 # Connection refused, no interface on given port
-                if (e.errno == 111): # Linux errno
-                    print(f"CONNECTION FAILED: Router {router_id}")
-                # elif (e.errno == INSERT WINDOWS ERRORNO): # Windows errno
-                #     print(f"CONNECTION FAILED: Router {router_id}")
-                else:
-                    raise e
+                print(f"CONNECTION FAILED: Router {router_id}")
         print()
         self.reset_route_flags()
 
