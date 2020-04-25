@@ -98,10 +98,10 @@ class RipDaemon:
             Run time can be set to an integer in seconds to determine how long the daemon will run.
             The purpose of this is primarly for testing purposes, to break the loop once time is up
         """
-        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) /                                                                                      self.timeout_ratio)
+        flood_time = time.time() + ((FLOOD_TIMER + randint(-5, 5)) / self.timeout_ratio)
         display_time = time.time() + (DISPLAY_TABLE_TIMER / self.timeout_ratio)
 
-        print(f'----- RIP Daemon {self.id} running at {self.timeout_ratio}x speed... ----')
+        print(f'---- RIP Daemon {self.id} running at {self.timeout_ratio}x speed... ----')
         while True:
             time.sleep(0.1) # Used to slow the program and stop it eating too much resources
             self.handle_incoming_traffic()
@@ -180,10 +180,8 @@ class RipDaemon:
                 s.close()
                 print(f"CONNECTION: Router {router_id}")
             except Exception as e:
-                if (e.errno == 111): # Connection refused, no interface on given port
-                    print(f"CONNECTION FAILED: Router {router_id}")
-                else:
-                    raise e
+                # Connection refused, no interface on given port
+                print(f"CONNECTION FAILED: Router {router_id}")
         print()
         self.reset_route_flags()
 
